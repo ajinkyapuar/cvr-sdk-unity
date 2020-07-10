@@ -4,6 +4,7 @@ using UnityEngine;
 using System;
 using UnityEngine.SceneManagement;
 using CognitiveVR;
+using CognitiveVR.External;
 
 
 //what is the split between dynamicCORE and dynamicMANAGER?
@@ -139,31 +140,45 @@ namespace CognitiveVR
             CognitiveVR.DynamicObjectCore.WriteControllerManifestEntry(data);
         }
 
-        //public static void RegisterMedia(DynamicData data, string videoUrl)
-        //{
-        //    bool foundSpot = false;
-        //    for (int i = 0; i < ActiveDynamicObjectsArray.Length; i++)
-        //    {
-        //        //if (string.IsNullOrEmpty(ActiveDynamicObjectsArray[i].Id))
-        //        if (!ActiveDynamicObjectsArray[i].active)
-        //        {
-        //            ActiveDynamicObjectsArray[i] = data;
-        //            foundSpot = true;
-        //            break;
-        //        }
-        //    }
-        //    if (!foundSpot)
-        //    {
-        //        Debug.LogWarning("Dynamic Object Array expanded!");
-        //
-        //        int nextFreeIndex = ActiveDynamicObjectsArray.Length;
-        //        Array.Resize<DynamicData>(ref ActiveDynamicObjectsArray, ActiveDynamicObjectsArray.Length * 2);
-        //        //just expanded the array. this spot will be empty
-        //        ActiveDynamicObjectsArray[nextFreeIndex] = data;
-        //    }
-        //
-        //    CognitiveVR.Internal.DynamicCore.RegisterMedia(data, videoUrl);
-        //}
+        public static void RegisterMedia(DynamicData data, string mediaUrl)
+        {
+            for (int i = 0; i < ActiveDynamicObjectsArray.Length; i++)
+            {
+                if (ActiveDynamicObjectsArray[i].active && data.Id == ActiveDynamicObjectsArray[i].Id)
+                {
+                    //id is already used. don't add to list again
+                    if (data.UseCustomId)
+                        Util.logError("DynamicManager::RegisterMedia found existing ID " + data.Id);
+                    else
+                        Util.logWarning("DynamicManager::RegisterMedia reuse ID " + data.Id);
+                    //should set dynamic data in array to match. updates 'remove' bool and any other variables. DOES NOT write to new dynamics manifest
+                    ActiveDynamicObjectsArray[i] = data;
+                    return;
+                }
+            }
+
+            bool foundSpot = false;
+            for (int i = 0; i < ActiveDynamicObjectsArray.Length; i++)
+            {
+                if (!ActiveDynamicObjectsArray[i].active)
+                {
+                    ActiveDynamicObjectsArray[i] = data;
+                    foundSpot = true;
+                    break;
+                }
+            }
+            if (!foundSpot)
+            {
+                Util.logWarning("Dynamic Object Array expanded!");
+
+                int nextFreeIndex = ActiveDynamicObjectsArray.Length;
+                Array.Resize<DynamicData>(ref ActiveDynamicObjectsArray, ActiveDynamicObjectsArray.Length * 2);
+                //just expanded the array. this spot will be empty
+                ActiveDynamicObjectsArray[nextFreeIndex] = data;
+            }
+
+            DynamicObjectCore.WriteDynamicMediaManifestEntry(data, mediaUrl);
+        }
 
         //this doesn't directly remove a dynamic object - it sets 'remove' so it can be removed on the next tick
         public static void RemoveDynamicObject(string id)
@@ -541,7 +556,28 @@ namespace CognitiveVR
                                 sb.Append(",");
                             sb.Append(ActiveDynamicObjectsArray[i].Properties[j].Key);
                             sb.Append(":");
-                            sb.Append(ActiveDynamicObjectsArray[i].Properties[j].Value);
+                            Debug.Log("is skeleton " + ActiveDynamicObjectsArray[i].IsSkeleton + "   " + ActiveDynamicObjectsArray[i].Properties[j].Value.GetType());
+                            if (ActiveDynamicObjectsArray[i].IsSkeleton)
+                            {
+                                if (ActiveDynamicObjectsArray[i].Properties[j].Value.GetType() == typeof(Quaternion))
+                                {
+                                    //format value to quaternion with X decimals
+                                    var quat = (Quaternion)ActiveDynamicObjectsArray[i].Properties[j].Value;
+                                    sb.Append("[");
+                                    sb.Concat(quat.x);
+                                    sb.Append(",");
+                                    sb.Concat(quat.y);
+                                    sb.Append(",");
+                                    sb.Concat(quat.z);
+                                    sb.Append(",");
+                                    sb.Concat(quat.w);
+                                    sb.Append("]");
+                                }
+                                else
+                                    sb.Append(ActiveDynamicObjectsArray[i].Properties[j].Value);
+                            }
+                            else
+                                sb.Append(ActiveDynamicObjectsArray[i].Properties[j].Value);
                         }
                         props = sb.ToString();
                     }
@@ -572,6 +608,7 @@ namespace CognitiveVR
                     }
 
                     ActiveDynamicObjectsArray[i].HasProperties = false;
+                    ActiveDynamicObjectsArray[i].Properties = null;
                     CognitiveVR.DynamicObjectCore.WriteDynamicController(ActiveDynamicObjectsArray[i], props, writeScale, builder.ToString());
                 }
             }
@@ -622,7 +659,6 @@ namespace CognitiveVR
                     scale = ActiveDynamicObjectsArray[index].Transform.lossyScale;
                     rot = ActiveDynamicObjectsArray[index].Transform.rotation;
                 }
-
 
                 //check distance
                 if (!writeData)
@@ -681,7 +717,27 @@ namespace CognitiveVR
                                 sb.Append(",");
                             sb.Append(ActiveDynamicObjectsArray[index].Properties[j].Key);
                             sb.Append(":");
-                            sb.Append(ActiveDynamicObjectsArray[index].Properties[j].Value);
+                            if (ActiveDynamicObjectsArray[index].IsSkeleton)
+                            {
+                                if (ActiveDynamicObjectsArray[index].Properties[j].Value.GetType() == typeof(Quaternion))
+                                {
+                                    //format value to quaternion with X decimals
+                                    var quat = (Quaternion)ActiveDynamicObjectsArray[index].Properties[j].Value;
+                                    sb.Append("[");
+                                    sb.Concat(quat.x);
+                                    sb.Append(",");
+                                    sb.Concat(quat.y);
+                                    sb.Append(",");
+                                    sb.Concat(quat.z);
+                                    sb.Append(",");
+                                    sb.Concat(quat.w);
+                                    sb.Append("]");
+                                }
+                                else
+                                    sb.Append(ActiveDynamicObjectsArray[index].Properties[j].Value);
+                            }
+                            else
+                                sb.Append(ActiveDynamicObjectsArray[index].Properties[j].Value);
                         }
                         props = sb.ToString();
                     }
@@ -710,6 +766,9 @@ namespace CognitiveVR
                             props += "\"enabled\":false";
                         }
                     }
+
+                    ActiveDynamicObjectsArray[index].HasProperties = false;
+                    ActiveDynamicObjectsArray[index].Properties = null;
 
                     CognitiveVR.DynamicObjectCore.WriteDynamic(ActiveDynamicObjectsArray[index], props, writeScale);
                 }

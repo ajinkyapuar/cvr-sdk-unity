@@ -14,6 +14,7 @@ namespace CognitiveVR
 #if CVR_VIVEWAVE
     [DefaultExecutionOrder(+10)] //this must run after PoseTrackerManager on controllers is enabled
 #endif
+    [HelpURL("https://docs.cognitive3d.com/unity/dynamic-objects/")]
     public class DynamicObject : MonoBehaviour
     {
         public enum CommonDynamicMesh
@@ -78,6 +79,8 @@ namespace CognitiveVR
         public float RotationThreshold = 0.1f;
         public float ScaleThreshold = 0.1f;
 
+        public bool TrackBoneRotations;
+        public Transform[] TrackedBones;
 
         public bool IsController;
         public bool IsRight;
@@ -87,6 +90,15 @@ namespace CognitiveVR
 
         [System.NonSerialized]
         public Vector3 StartingScale;
+
+        bool IsMedia
+        {
+            get
+            {
+                return GetComponent<MediaComponent>() != null;
+            }
+        }
+        public string mediaURL;
 
         //make this dynamic object record position on the same frame as physics gaze
         public bool SyncWithPlayerGazeTick;
@@ -135,7 +147,7 @@ namespace CognitiveVR
                     registerid = CustomId;
                 }
 
-                var Data = new DynamicData(gameObject.name, registerid, tempMeshName, transform, transform.position, transform.rotation, transform.lossyScale, PositionThreshold, RotationThreshold, ScaleThreshold, UpdateRate, IsController, ControllerType,IsRight);
+                var Data = new DynamicData(gameObject.name, registerid, tempMeshName, transform, transform.position, transform.rotation, transform.lossyScale, PositionThreshold, RotationThreshold, ScaleThreshold, UpdateRate, IsController, ControllerType,IsRight,TrackBoneRotations);
 
                 DataId = Data.Id;
 
@@ -158,11 +170,23 @@ namespace CognitiveVR
 #endif
                     CognitiveVR.DynamicManager.RegisterController(Data);
                 }
+                else if (IsMedia)
+                {
+                    DynamicManager.RegisterMedia(Data, mediaURL);
+                }
                 else
                 {
                     CognitiveVR.DynamicManager.RegisterDynamicObject(Data);
                 }
-                if (SyncWithPlayerGazeTick)
+                if (TrackBoneRotations)
+                {
+                    rotations = new Dictionary<string, Quaternion>(TrackedBones.Length);
+                    for(int i = 0; i<TrackedBones.Length;i++)
+                    {
+                        rotations.Add(TrackedBones[i].name, new Quaternion(0,0,0,0));
+                    }
+                }
+                if (SyncWithPlayerGazeTick || TrackBoneRotations)
                 {
                     CognitiveVR.Core.TickEvent += Core_TickEvent;
                 }
@@ -173,9 +197,42 @@ namespace CognitiveVR
             }
         }
 
+        Dictionary<string, Quaternion> rotations;
         private void Core_TickEvent()
         {
-            CognitiveVR.DynamicManager.RecordDynamic(DataId,false);
+            if (TrackBoneRotations)
+            {
+                bool writeAnyData = false;
+                var properties = new List < KeyValuePair<string, object>>();
+                //iterate on all bones and write as properties
+                for(int i = 0; i<TrackedBones.Length;i++)
+                {
+                    //TODO check if rotation beyond a threshold
+                    //rotations[TrackedBones[i].name]
+                    var rot = TrackedBones[i].localRotation;
+                    float f = Quaternion.Dot(rotations[TrackedBones[i].name], rot);
+
+                    float fabs = f < 0 ? f * -1 : f;
+                    float min = fabs < 1 ? fabs : 1;
+
+                    bool writeData = false;
+                    if (System.Math.Acos(min) * 114.59156f > RotationThreshold)
+                    {
+                        rotations[TrackedBones[i].name] = rot;
+                        //ActiveDynamicObjectsArray[index].dirty = true;
+                        writeData = true;
+                        writeAnyData = true;
+                    }
+                    if (writeData)
+                        properties.Add(new KeyValuePair<string, object>(TrackedBones[i].name, TrackedBones[i].localRotation));
+                }
+                if (writeAnyData)
+                    RecordSnapshot(properties);
+            }
+            else
+            {
+                CognitiveVR.DynamicManager.RecordDynamic(DataId, false);
+            }
         }
 
         private void OnCoreInitialize(CognitiveVR.Error error)

@@ -60,6 +60,10 @@ namespace CognitiveVR
             var isController = serializedObject.FindProperty("IsController");
             var syncWithGaze = serializedObject.FindProperty("SyncWithPlayerGazeTick");
             var idPool = serializedObject.FindProperty("IdPool");
+            var mediaURL = serializedObject.FindProperty("mediaURL");
+
+            var trackBoneRotations = serializedObject.FindProperty("TrackBoneRotations");
+            var trackedBones = serializedObject.FindProperty("TrackedBones");
 
             foreach (var t in serializedObject.targetObjects) //makes sure a custom id is valid
             {
@@ -212,8 +216,13 @@ namespace CognitiveVR
                     GUILayout.Space(5);
                 }
 
+                EditorGUILayout.PropertyField(mediaURL, new GUIContent("External Media Url","Set an external source to display this video on SceneExplorer"));
+
+                EditorGUILayout.PropertyField(trackBoneRotations);
+                EditorGUILayout.PropertyField(trackedBones,true);
+
                 //Snapshot Threshold
-                
+
                 GUILayout.Label("Data Snapshot", EditorStyles.boldLabel);
 
                 //controller stuff

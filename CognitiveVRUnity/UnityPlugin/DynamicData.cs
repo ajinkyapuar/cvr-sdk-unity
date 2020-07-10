@@ -59,9 +59,10 @@ namespace CognitiveVR
 
         public bool IsController;
         public bool IsRightHand;
+        public bool IsSkeleton;
         public string ControllerType;
 
-        public DynamicData(string name, string customid, string meshname, Transform transform, Vector3 position, Quaternion rotation, Vector3 scale, float posThreshold, float rotThreshold, float scaleThreshold, float updateInterval, bool iscontroller, string controllerType, bool isRightHand)
+        public DynamicData(string name, string customid, string meshname, Transform transform, Vector3 position, Quaternion rotation, Vector3 scale, float posThreshold, float rotThreshold, float scaleThreshold, float updateInterval, bool iscontroller, string controllerType, bool isRightHand, bool isSkeleton)
         {
             if (string.IsNullOrEmpty(customid))
             {
@@ -92,6 +93,7 @@ namespace CognitiveVR
             IsController = iscontroller;
             ControllerType = controllerType;
             IsRightHand = isRightHand;
+            IsSkeleton = isSkeleton;
 
             DesiredUpdateRate = updateInterval;
             UpdateInterval = 0;

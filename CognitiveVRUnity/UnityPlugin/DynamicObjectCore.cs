@@ -143,6 +143,7 @@ namespace CognitiveVR
         internal static void WriteDynamicManifestEntry(DynamicData data)
         {
             DynamicObjectManifestEntry dome = new DynamicObjectManifestEntry(data.Id, data.Name, data.MeshName);
+            dome.IsSkeleton = data.IsSkeleton;
 
             queuedManifest.Enqueue(dome);
             tempsnapshots++;
@@ -406,7 +407,14 @@ namespace CognitiveVR
 
             if (entry.isVideo)
             {
+                builder.Append(",");
                 JsonUtil.SetString("externalVideoSource", entry.videoURL, builder);
+            }
+
+            if (entry.IsSkeleton)
+            {
+                builder.Append(",");
+                JsonUtil.SetString("IsSkeleton", "true", builder);
             }
 
             if (entry.isController)

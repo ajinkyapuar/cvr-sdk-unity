@@ -22,6 +22,7 @@ namespace CognitiveVR
 
         public bool isController;
         public string controllerType;
+        public bool IsSkeleton;
 
         public DynamicObjectManifestEntry(string id, string name, string meshName)
         {
