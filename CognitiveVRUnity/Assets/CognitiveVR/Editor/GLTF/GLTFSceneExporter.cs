@@ -71,9 +71,12 @@ namespace UnityGLTF
 		}
 		private readonly Dictionary<PrimKey, MeshId> _primOwner = new Dictionary<PrimKey, MeshId>();
 		private readonly Dictionary<Mesh, MeshPrimitive[]> _meshToPrims = new Dictionary<Mesh, MeshPrimitive[]>();
+        private readonly Dictionary<int, NodeId> _existedNodes = new Dictionary<int, NodeId>();
+        private readonly Dictionary<int, AnimationId> _existedAnimations = new Dictionary<int, AnimationId>();
+        private readonly Dictionary<int, SkinId> _existedSkins = new Dictionary<int, SkinId>();
 
-		// Settings
-		public static bool ExportNames = true; //MUST BE TRUE
+        // Settings
+        public static bool ExportNames = true; //MUST BE TRUE
 		public static bool RequireExtensions = false; //PROBABLY FALSE
 
         public CognitiveVR.DynamicObject Dynamic;
@@ -110,8 +113,10 @@ namespace UnityGLTF
 				Nodes = new List<Node>(),
 				Samplers = new List<Sampler>(),
 				Scenes = new List<GLTFScene>(),
-				Textures = new List<GLTFTexture>()
-			};
+				Textures = new List<GLTFTexture>(),
+                Skins = new List<Skin>(),
+                Animations = new List<GLTFAnimation>()
+            };
 
             if (_root.ExtensionsUsed == null)
                 _root.ExtensionsUsed = new List<string>(new[] { "KHR_lights_punctual" });
@@ -266,11 +271,11 @@ namespace UnityGLTF
 			_bufferWriter = new BinaryWriter(binFile);
 
 			_root.Scene = ExportScene(fileName, _rootTransforms);
+            AlignToBoundary(_bufferWriter.BaseStream, 0x00);
+            _buffer.Uri = fileName + ".bin";
+            _buffer.ByteLength = CalculateAlignment((uint)_bufferWriter.BaseStream.Length, 4);
 
-			_buffer.Uri = fileName + ".bin";
-			_buffer.ByteLength = (uint)_bufferWriter.BaseStream.Length;
-
-			var gltfFile = File.CreateText(Path.Combine(path, fileName + ".gltf"));
+            var gltfFile = File.CreateText(Path.Combine(path, fileName + ".gltf"));
 			_root.Serialize(gltfFile);
 
 #if WINDOWS_UWP
@@ -427,7 +432,7 @@ namespace UnityGLTF
 				scene.Name = name;
 			}
 
-			scene.Nodes = new List<NodeId>(rootObjTransforms.Length); //skip dynamic objects here //TODO
+			scene.Nodes = new List<NodeId>(rootObjTransforms.Length);
             CognitiveVR.DynamicObject dyn;
 
             foreach (var transform in rootObjTransforms)
@@ -530,28 +535,53 @@ namespace UnityGLTF
 			};
 			_root.Nodes.Add(node);
 
-			// children that are primitives get put in a mesh
-			GameObject[] primitives, nonPrimitives;
-			FilterPrimitives(nodeTransform, out primitives, out nonPrimitives);
-			if (primitives.Length > 0)
-			{
-				node.Mesh = ExportMesh(nodeTransform.name, primitives);
+            if (!_existedNodes.ContainsKey(nodeTransform.GetInstanceID()))
+            {
+                _existedNodes.Add(nodeTransform.GetInstanceID(), id);
+            }
 
-				// associate unity meshes with gltf mesh id
-				foreach (var prim in primitives)
-				{
-					var filter = prim.GetComponent<MeshFilter>();
-					var renderer = prim.GetComponent<MeshRenderer>();
-					_primOwner[new PrimKey { Mesh = filter.sharedMesh, Material = renderer.sharedMaterial }] = node.Mesh;
-				}
-			}
+            // children that are primitives get put in a mesh
+            GameObject[] meshPrimitives, skinnedMeshPrimitives, nonPrimitives;
+			FilterPrimitives(nodeTransform, out meshPrimitives, out skinnedMeshPrimitives, out nonPrimitives);
+            if (meshPrimitives.Length + skinnedMeshPrimitives.Length > 0)
+            {
+                if (skinnedMeshPrimitives.Length > 0)
+                {
+                    ExportSkin(nodeTransform.name, skinnedMeshPrimitives, node);
+                }
 
-			// children that are not primitives get added as child nodes
-			if (nonPrimitives.Length > 0)
+                if (meshPrimitives.Length > 0)
+                {
+                    node.Mesh = ExportMesh(nodeTransform.name, meshPrimitives);
+                }
+
+                var primitives = new List<GameObject>();
+                primitives.AddRange(meshPrimitives);
+                primitives.AddRange(skinnedMeshPrimitives);
+                // associate unity meshes with gltf mesh id
+                foreach (var prim in primitives)
+                {
+                    var smr = prim.GetComponent<SkinnedMeshRenderer>();
+                    if (smr != null)
+                    {
+                        _primOwner[new PrimKey { Mesh = smr.sharedMesh, Material = smr.sharedMaterial }] = node.Mesh;
+                    }
+                    else
+                    {
+                        var filter = prim.GetComponent<MeshFilter>();
+                        var renderer = prim.GetComponent<MeshRenderer>();
+                        _primOwner[new PrimKey { Mesh = filter.sharedMesh, Material = renderer.sharedMaterial }] = node.Mesh;
+                    }
+                }
+            }
+
+            // children that are not primitives get added as child nodes
+            if (nonPrimitives.Length > 0)
 			{
 				node.Children = new List<NodeId>(nonPrimitives.Length);
                 CognitiveVR.DynamicObject dyn;
-				foreach (var child in nonPrimitives)
+                List<GameObject> postProcess = new List<GameObject>();
+                foreach (var child in nonPrimitives)
 				{
                     dyn = child.GetComponent<CognitiveVR.DynamicObject>();
                     //skip dynamics
@@ -560,9 +590,24 @@ namespace UnityGLTF
                         || (Dynamic != null && (dyn != null && dyn != Dynamic))) //this shouldn't ever happen. if find any dynamic as child, should skip
                     { continue; }
                     if (!child.gameObject.activeInHierarchy) continue;
+                    //node.Children.Add(ExportNode(child.transform));
+                    GameObject[] childMeshPrimitives, childSkinnedMeshPrimitives, childNonPrimitives;
+                    FilterPrimitives(child.transform, out childMeshPrimitives, out childSkinnedMeshPrimitives, out childNonPrimitives);
+                    if (childMeshPrimitives.Length + childSkinnedMeshPrimitives.Length > 0)
+                    {
+                        postProcess.Add(child);
+                        continue;
+                    }
+
                     node.Children.Add(ExportNode(child.transform));
-				}
-			}
+                }
+                foreach (var child in postProcess)
+                {
+                    node.Children.Add(ExportNode(child.transform));
+                }
+            }
+
+            //skip exporting animations
 
 			return id;
 		}
@@ -629,6 +674,15 @@ namespace UnityGLTF
 			return id;
 		}
 
+        private static bool ContainsValidRenderer(GameObject gameObject)
+        {
+            if (gameObject.GetComponent<MeshFilter>() != null && gameObject.GetComponent<MeshRenderer>() != null && gameObject.GetComponent<MeshRenderer>().enabled)
+                return true;
+            if (gameObject.GetComponent<SkinnedMeshRenderer>() != null && gameObject.GetComponent<SkinnedMeshRenderer>().enabled)
+                return true;
+            return false;
+        }
+
         private LightId ExportLight(Light unityLight)
         {
             GLTFLight light;
@@ -692,35 +746,52 @@ namespace UnityGLTF
             return id;
         }
 
-        private void FilterPrimitives(Transform transform, out GameObject[] primitives, out GameObject[] nonPrimitives)
-		{
+        private void FilterPrimitives(Transform transform, out GameObject[] meshPrimitives, out GameObject[] skinnedMeshPrimitives, out GameObject[] nonPrimitives)
+        {
 			var childCount = transform.childCount;
-			var prims = new List<GameObject>(childCount + 1);
-			var nonPrims = new List<GameObject>(childCount);
+            var meshPrims = new List<GameObject>(childCount + 1);
+            var skinnedMeshPrims = new List<GameObject>(childCount + 1);
+            var nonPrims = new List<GameObject>(childCount);
 
-            var mf = transform.gameObject.GetComponent<MeshFilter>();
-            var mr = transform.gameObject.GetComponent<MeshRenderer>();
+            var gameObject = transform.gameObject;
+            if (gameObject.activeSelf)
+            {
+                if (ContainsValidRenderer(gameObject))
+                {
+                    if (gameObject.GetComponent<SkinnedMeshRenderer>() != null)
+                    {
+                        skinnedMeshPrims.Add(gameObject);
+                    }
+                    else
+                    {
+                        meshPrims.Add(gameObject);
+                    }
+                }
+            }
+            for (var i = 0; i < childCount; i++)
+            {
+                var go = transform.GetChild(i).gameObject;
+                if (IsPrimitive(go))
+                {
+                    if (go.GetComponent<SkinnedMeshRenderer>() != null)
+                    {
+                        skinnedMeshPrims.Add(go);
+                    }
+                    else
+                    {
+                        meshPrims.Add(go);
+                    }
+                }
+                else
+                {
+                    nonPrims.Add(go);
+                }
+            }
 
-			// add another primitive if the root object also has a mesh
-			if (mf != null
-                && mr != null
-                && mr.enabled
-                && mf.sharedMesh != null
-                && (OverrideBakeables.Find(delegate (CognitiveVR.BakeableMesh bm) { return bm.meshFilter == mf; }) != null || !string.IsNullOrEmpty(UnityEditor.AssetDatabase.GetAssetPath(mf.sharedMesh)))
-                && transform.gameObject.activeInHierarchy)
-			{
-				prims.Add(transform.gameObject);
-			}
-
-			for (var i = 0; i < childCount; i++)
-			{
-				var go = transform.GetChild(i).gameObject;
-				nonPrims.Add(go);
-			}
-
-			primitives = prims.ToArray();
-			nonPrimitives = nonPrims.ToArray();
-		}
+            meshPrimitives = meshPrims.ToArray();
+            skinnedMeshPrimitives = skinnedMeshPrims.ToArray();
+            nonPrimitives = nonPrims.ToArray();
+        }
 
 		private bool IsPrimitive(GameObject gameObject)
 		{
@@ -735,162 +806,325 @@ namespace UnityGLTF
 			 */
             return gameObject.activeInHierarchy
                 && gameObject.transform.childCount == 0
-				&& gameObject.transform.localPosition == Vector3.zero
-				&& gameObject.transform.localRotation == Quaternion.identity
-				&& gameObject.transform.localScale == Vector3.one
-				&& mf != null
-                && mr != null
-                && (OverrideBakeables.Find(delegate (CognitiveVR.BakeableMesh bm) { return bm.meshFilter == mf; }) != null || !string.IsNullOrEmpty(UnityEditor.AssetDatabase.GetAssetPath(mf.sharedMesh)))
-                && mr.enabled;
-		}
+                && gameObject.transform.localPosition == Vector3.zero
+                && gameObject.transform.localRotation == Quaternion.identity
+                && gameObject.transform.localScale == Vector3.one
+                && ContainsValidRenderer(gameObject)
+                && (OverrideBakeables.Find(delegate (CognitiveVR.BakeableMesh bm)
+                {
+                    return bm.meshFilter == mf;
+                }) != null
+                
+                || (mf != null && !string.IsNullOrEmpty(UnityEditor.AssetDatabase.GetAssetPath(mf.sharedMesh))));
 
-		private MeshId ExportMesh(string name, GameObject[] primitives)
+
+            //&& (OverrideBakeables.Find(delegate (CognitiveVR.BakeableMesh bm) { return bm.meshFilter == mf; }) != null || !string.IsNullOrEmpty(UnityEditor.AssetDatabase.GetAssetPath(mf.sharedMesh)));
+            //&& mr.enabled;
+            //should check if the valid renderer is enabled here
+            //support override bakeable meshes (canvas, terrain, environmental skinned meshes
+        }
+
+        private void ExportSkin(string name, GameObject[] primitives, Node node)
+        {
+            foreach (var prim in primitives)
+            {
+                var smr = prim.GetComponent<SkinnedMeshRenderer>();
+                SkinId skinId = null;
+                if (_existedSkins.TryGetValue(smr.rootBone.GetInstanceID(), out skinId))
+                {
+                    node.Skin = skinId;
+                    node.Mesh = ExportMesh(prim.name, new GameObject[] { prim });
+                    continue;
+                }
+
+                var skin = new Skin
+                {
+                    Joints = new List<NodeId>()
+                };
+
+                var mesh = smr.sharedMesh;
+                if (mesh.bindposes.Length != 0)
+                {
+                    skin.InverseBindMatrices = ExportAccessor(SchemaExtensions.ConvertMatrix4x4CoordinateSpaceAndCopy(mesh.bindposes));
+                }
+
+                var baseId = _root.Nodes.Count;
+
+                foreach (var bone in smr.bones)
+                {
+                    var translation = bone.localPosition;
+                    var rotation = bone.localRotation;
+                    var scale = bone.localScale;
+
+                    NodeId nodeId = null;
+                    if (!_existedNodes.TryGetValue(bone.GetInstanceID(), out nodeId))
+                    {
+                        var boneNode = new Node
+                        {
+                            Name = ExportNames ? bone.gameObject.name : null,
+                            Translation = new GLTF.Math.Vector3(translation.x, translation.y, translation.z),
+                            Rotation = new GLTF.Math.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
+                            Scale = new GLTF.Math.Vector3(scale.x, scale.y, scale.z),
+                        };
+
+                        if (bone.childCount > 0)
+                        {
+                            boneNode.Children = new List<NodeId>();
+                            for (var i = 0; i < bone.childCount; ++i)
+                            {
+                                var childIndex = Array.IndexOf(smr.bones, bone.GetChild(i));
+                                if (-1 == childIndex)
+                                {
+                                    continue;
+                                }
+                                boneNode.Children.Add(
+                                    new NodeId
+                                    {
+                                        Id = childIndex + baseId,
+                                        Root = _root
+                                    }
+                                );
+                            }
+                        }
+
+                        nodeId = new NodeId
+                        {
+                            Id = _root.Nodes.Count,
+                            Root = _root
+                        };
+
+                        _root.Nodes.Add(boneNode);
+                        _existedNodes.Add(bone.GetInstanceID(), nodeId);
+                    }
+
+                    skin.Joints.Add(nodeId);
+                }
+
+                NodeId rootBoneId = null;
+                if (!_existedNodes.TryGetValue(smr.rootBone.GetInstanceID(), out rootBoneId))
+                {
+                    rootBoneId = new NodeId
+                    {
+                        Id = baseId,
+                        Root = _root
+                    };
+                    _existedNodes.Add(smr.rootBone.GetInstanceID(), rootBoneId);
+                }
+
+                skin.Skeleton = rootBoneId;
+
+                skinId = new SkinId
+                {
+                    Id = _root.Skins.Count,
+                    Root = _root
+                };
+
+                _root.Skins.Add(skin);
+
+                node.Skin = skinId;
+
+                node.Mesh = ExportMesh(prim.name, new GameObject[] { prim });
+
+                _existedSkins.Add(smr.rootBone.GetInstanceID(), skinId);
+            }
+        }
+
+        private MeshId ExportMesh(string name, GameObject[] primitives)
 		{
-			// check if this set of primitives is already a mesh
-			MeshId existingMeshId = null;
-			var key = new PrimKey();
-			foreach (var prim in primitives)
-			{
-				var filter = prim.GetComponent<MeshFilter>();
-				var renderer = prim.GetComponent<MeshRenderer>();
-				key.Mesh = filter.sharedMesh;
-				key.Material = renderer.sharedMaterial;
+            // check if this set of primitives is already a mesh
+            MeshId existingMeshId = null;
+            var key = new PrimKey();
+            foreach (var prim in primitives)
+            {
+                var smr = prim.GetComponent<SkinnedMeshRenderer>();
+                if (smr != null)
+                {
+                    key.Mesh = smr.sharedMesh;
+                    key.Material = smr.sharedMaterial;
+                }
+                else
+                {
+                    var filter = prim.GetComponent<MeshFilter>();
+                    var renderer = prim.GetComponent<MeshRenderer>();
+                    key.Mesh = filter.sharedMesh;
+                    key.Material = renderer.sharedMaterial;
+                }
 
-				MeshId tempMeshId;
-				if (_primOwner.TryGetValue(key, out tempMeshId) && (existingMeshId == null || tempMeshId == existingMeshId))
-				{
-					existingMeshId = tempMeshId;
-				}
-				else
-				{
-					existingMeshId = null;
-					break;
-				}
-			}
+                MeshId tempMeshId;
+                if (_primOwner.TryGetValue(key, out tempMeshId) && (existingMeshId == null || tempMeshId == existingMeshId))
+                {
+                    existingMeshId = tempMeshId;
+                }
+                else
+                {
+                    existingMeshId = null;
+                    break;
+                }
+            }
 
             // if so, return that mesh id
             if (existingMeshId != null)
-			{
-				return existingMeshId;
-			}
+            {
+                return existingMeshId;
+            }
 
-			// if not, create new mesh and return its id
-			var mesh = new GLTFMesh();
+            // if not, create new mesh and return its id
+            var mesh = new GLTFMesh();
 
-			if (ExportNames)
-			{
-				mesh.Name = name;
-			}
+            if (ExportNames)
+            {
+                mesh.Name = name;
+            }
 
-			mesh.Primitives = new List<MeshPrimitive>(primitives.Length);
-			foreach (var prim in primitives)
-			{
-				mesh.Primitives.AddRange(ExportPrimitive(prim));
-			}
+            mesh.Primitives = new List<MeshPrimitive>(primitives.Length);
+            foreach (var prim in primitives)
+            {
+                MeshPrimitive[] meshPrimitives = ExportPrimitive(prim, mesh);
+                if (meshPrimitives != null)
+                {
+                    mesh.Primitives.AddRange(meshPrimitives);
+                }
+            }
 
-			var id = new MeshId
-			{
-				Id = _root.Meshes.Count,
-				Root = _root
-			};
-			_root.Meshes.Add(mesh);
+            var id = new MeshId
+            {
+                Id = _root.Meshes.Count,
+                Root = _root
+            };
+            _root.Meshes.Add(mesh);
 
-			return id;
-		}
+            return id;
+        }
 
-		// a mesh *might* decode to multiple prims if there are submeshes
-		private MeshPrimitive[] ExportPrimitive(GameObject gameObject)
-		{
-			var filter = gameObject.GetComponent<MeshFilter>();
-			var meshObj = filter.sharedMesh;
+        // a mesh *might* decode to multiple prims if there are submeshes
+        private MeshPrimitive[] ExportPrimitive(GameObject gameObject, GLTFMesh mesh)
+        {
+            Mesh meshObj = null;
+            SkinnedMeshRenderer smr = null;
+            var filter = gameObject.GetComponent<MeshFilter>();
+            if (filter != null)
+            {
+                meshObj = filter.sharedMesh;
+            }
+            else
+            {
+                smr = gameObject.GetComponent<SkinnedMeshRenderer>();
+                meshObj = smr.sharedMesh;
+            }
+            if (meshObj == null)
+            {
+                Debug.LogError(string.Format("MeshFilter.sharedMesh on gameobject:{0} is missing , skipping", gameObject.name));
+                return null;
+            }
 
             var renderer = gameObject.GetComponent<MeshRenderer>();
+            var materialsObj = renderer != null ? renderer.sharedMaterials : smr.sharedMaterials;
 
-            var materialsObj = renderer.sharedMaterials;
+            var prims = new MeshPrimitive[meshObj.subMeshCount];
 
-			var prims = new MeshPrimitive[meshObj.subMeshCount];
+            // don't export any more accessors if this mesh is already exported
+            MeshPrimitive[] primVariations;
+            if (_meshToPrims.TryGetValue(meshObj, out primVariations)
+                && meshObj.subMeshCount == primVariations.Length)
+            {
+                for (var i = 0; i < primVariations.Length; i++)
+                {
+                    prims[i] = new MeshPrimitive(primVariations[i], _root)
+                    {
+                        Material = ExportMaterial(materialsObj[i], renderer)
+                    };
+                }
 
-			// don't export any more accessors if this mesh is already exported
-			MeshPrimitive[] primVariations;
-			if (_meshToPrims.TryGetValue(meshObj, out primVariations)
-				&& meshObj.subMeshCount == primVariations.Length)
-			{
-				for (var i = 0; i < primVariations.Length; i++)
-				{
-					prims[i] = new MeshPrimitive(primVariations[i], _root)
-					{
-						Material = ExportMaterial(materialsObj[i])
-					};
-				}
+                return prims;
+            }
 
-				return prims;
-			}
+            AccessorId aPosition = null, aNormal = null, aTangent = null,
+                aTexcoord0 = null, aTexcoord1 = null, aTexcoord2 = null, aTexcoord3 = null,
+                aColor0 = null, aJoint0 = null, aWeight0 = null;
 
-			AccessorId aPosition = null, aNormal = null, aTangent = null,
-				aTexcoord0 = null, aTexcoord1 = null, aColor0 = null;
+            aPosition = ExportAccessor(SchemaExtensions.ConvertVector3CoordinateSpaceAndCopy(meshObj.vertices, SchemaExtensions.CoordinateSpaceConversionScale));
 
-			aPosition = ExportAccessor(SchemaExtensions.ConvertVector3CoordinateSpaceAndCopy(meshObj.vertices, SchemaExtensions.CoordinateSpaceConversionScale));
+            if (meshObj.normals.Length != 0)
+                aNormal = ExportAccessor(SchemaExtensions.ConvertVector3CoordinateSpaceAndCopy(meshObj.normals, SchemaExtensions.CoordinateSpaceConversionScale));
 
-			if (meshObj.normals.Length != 0)
-				aNormal = ExportAccessor(SchemaExtensions.ConvertVector3CoordinateSpaceAndCopy(meshObj.normals, SchemaExtensions.CoordinateSpaceConversionScale));
+            if (meshObj.tangents.Length != 0)
+                aTangent = ExportAccessor(SchemaExtensions.ConvertVector4CoordinateSpaceAndCopy(meshObj.tangents, SchemaExtensions.TangentSpaceConversionScale));
 
-			if (meshObj.tangents.Length != 0)
-				aTangent = ExportAccessor(SchemaExtensions.ConvertVector4CoordinateSpaceAndCopy(meshObj.tangents, SchemaExtensions.TangentSpaceConversionScale));
+            if (meshObj.uv.Length != 0)
+                aTexcoord0 = ExportAccessor(SchemaExtensions.FlipTexCoordArrayVAndCopy(meshObj.uv));
 
-			if (meshObj.uv.Length != 0)
-				aTexcoord0 = ExportAccessor(SchemaExtensions.FlipTexCoordArrayVAndCopy(meshObj.uv));
+            if (meshObj.uv2.Length != 0)
+                aTexcoord1 = ExportAccessor(SchemaExtensions.FlipTexCoordArrayVAndCopy(meshObj.uv2));
 
-			if (meshObj.uv2.Length != 0)
-				aTexcoord1 = ExportAccessor(SchemaExtensions.FlipTexCoordArrayVAndCopy(meshObj.uv2));
+            if (meshObj.uv3.Length != 0)
+                aTexcoord2 = ExportAccessor(SchemaExtensions.FlipTexCoordArrayVAndCopy(meshObj.uv3));
 
-			if (meshObj.colors.Length != 0)
-				aColor0 = ExportAccessor(meshObj.colors);
+            if (meshObj.uv4.Length != 0)
+                aTexcoord3 = ExportAccessor(SchemaExtensions.FlipTexCoordArrayVAndCopy(meshObj.uv4));
 
-			MaterialId lastMaterialId = null;
+            if (meshObj.colors.Length != 0)
+                aColor0 = ExportAccessor(meshObj.colors);
 
-			for (var submesh = 0; submesh < meshObj.subMeshCount; submesh++)
-			{
-				var primitive = new MeshPrimitive();
+            if (meshObj.boneWeights.Length != 0)
+            {
+                aJoint0 = ExportAccessor(SchemaExtensions.ExtractJointAndCopy(meshObj.boneWeights), SemanticProperties.JOINTS_0);
+                aWeight0 = ExportAccessor(SchemaExtensions.ExtractWeightAndCopy(meshObj.boneWeights));
+            }
 
-				var triangles = meshObj.GetTriangles(submesh);
-                if (triangles.Length == 0) { continue; } //empty submesh
-                primitive.Indices = ExportAccessor(SchemaExtensions.FlipFacesAndCopy(triangles), true);
+            MaterialId lastMaterialId = null;
 
-				primitive.Attributes = new Dictionary<string, AccessorId>();
-				primitive.Attributes.Add(SemanticProperties.POSITION, aPosition);
+            for (var submesh = 0; submesh < meshObj.subMeshCount; submesh++)
+            {
+                var primitive = new MeshPrimitive();
 
-				if (aNormal != null)
-					primitive.Attributes.Add(SemanticProperties.NORMAL, aNormal);
-				if (aTangent != null)
-					primitive.Attributes.Add(SemanticProperties.TANGENT, aTangent);
-				if (aTexcoord0 != null)
-					primitive.Attributes.Add(SemanticProperties.TexCoord(0), aTexcoord0);
-				if (aTexcoord1 != null)
-					primitive.Attributes.Add(SemanticProperties.TexCoord(1), aTexcoord1);
-				if (aColor0 != null)
-					primitive.Attributes.Add(SemanticProperties.Color(0), aColor0);
+                var topology = meshObj.GetTopology(submesh);
+                var indices = meshObj.GetIndices(submesh);
+                if (topology == MeshTopology.Triangles) SchemaExtensions.FlipTriangleFaces(indices);
 
-				if (submesh < materialsObj.Length)
-				{
-					primitive.Material = ExportMaterial(materialsObj[submesh]);
-					lastMaterialId = primitive.Material;
-				}
-				else
-				{
-					primitive.Material = lastMaterialId;
-				}
+                primitive.Mode = GetDrawMode(topology);
+                primitive.Indices = ExportAccessor(indices, SemanticProperties.INDICES);
 
-				prims[submesh] = primitive;
-			}
-            //remove any prims that have empty triangles
-            List<MeshPrimitive> listPrims = new List<MeshPrimitive>(prims);
-            listPrims.RemoveAll(EmptyPrimitive);
-            prims = listPrims.ToArray();
+                primitive.Attributes = new Dictionary<string, AccessorId>();
+                primitive.Attributes.Add(SemanticProperties.POSITION, aPosition);
+
+                if (aNormal != null)
+                    primitive.Attributes.Add(SemanticProperties.NORMAL, aNormal);
+                if (aTangent != null)
+                    primitive.Attributes.Add(SemanticProperties.TANGENT, aTangent);
+                if (aTexcoord0 != null)
+                    primitive.Attributes.Add(SemanticProperties.TEXCOORD_0, aTexcoord0);
+                if (aTexcoord1 != null)
+                    primitive.Attributes.Add(SemanticProperties.TEXCOORD_1, aTexcoord1);
+                if (aTexcoord2 != null)
+                    primitive.Attributes.Add(SemanticProperties.TEXCOORD_2, aTexcoord2);
+                if (aTexcoord3 != null)
+                    primitive.Attributes.Add(SemanticProperties.TEXCOORD_3, aTexcoord3);
+                if (aColor0 != null)
+                    primitive.Attributes.Add(SemanticProperties.COLOR_0, aColor0);
+                if (aJoint0 != null)
+                    primitive.Attributes.Add(SemanticProperties.JOINTS_0, aJoint0);
+                if (aWeight0 != null)
+                    primitive.Attributes.Add(SemanticProperties.WEIGHTS_0, aWeight0);
+
+                if (submesh < materialsObj.Length)
+                {
+                    primitive.Material = ExportMaterial(materialsObj[submesh], renderer);
+                    lastMaterialId = primitive.Material;
+                }
+                else
+                {
+                    primitive.Material = lastMaterialId;
+                }
+
+                //ExportBlendShapes(smr, meshObj, primitive, mesh);
+
+                prims[submesh] = primitive;
+            }
 
             _meshToPrims[meshObj] = prims;
 
-			return prims;
-		}
+            return prims;
+        }
 
         private static bool EmptyPrimitive(MeshPrimitive prim)
         {
@@ -901,8 +1135,8 @@ namespace UnityGLTF
             return false;
         }
 
-        private MaterialId ExportMaterial(Material materialObj)
-		{
+        private MaterialId ExportMaterial(Material materialObj, MeshRenderer renderer)
+        {
             //TODO if material is null
 			MaterialId id = GetMaterialId(_root, materialObj);
 			if (id != null)
@@ -1084,6 +1318,7 @@ namespace UnityGLTF
 
 			def.Extensions[ExtTextureTransformExtensionFactory.EXTENSION_NAME] = new ExtTextureTransformExtension(
 				new GLTF.Math.Vector2(offset.x, -offset.y),
+                0,
 				new GLTF.Math.Vector2(scale.x, scale.y),
 				0 // TODO: support UV channels
 			);
@@ -1413,7 +1648,118 @@ namespace UnityGLTF
 			return samplerId;
 		}
 
-		private AccessorId ExportAccessor(int[] arr, bool isIndices = false)
+        private AccessorId ExportAccessor(int[] arr, string property)
+        {
+            uint count = (uint)arr.Length;
+
+            if (count == 0)
+            {
+                throw new Exception("Accessors can not have a count of 0.");
+            }
+
+            bool isJoints = property == SemanticProperties.JOINTS_0;
+            bool isIndices = property == SemanticProperties.INDICES;
+
+            var accessor = new Accessor();
+            accessor.Count = isJoints ? count / 4 : count;
+            accessor.Type = isJoints ? GLTFAccessorAttributeType.VEC4 : GLTFAccessorAttributeType.SCALAR;
+
+            int min = arr[0];
+            int max = arr[0];
+
+            for (var i = 1; i < count; i++)
+            {
+                var cur = arr[i];
+
+                if (cur < min)
+                {
+                    min = cur;
+                }
+                if (cur > max)
+                {
+                    max = cur;
+                }
+            }
+
+            AlignToBoundary(_bufferWriter.BaseStream, 0x00);
+            uint byteOffset = CalculateAlignment((uint)_bufferWriter.BaseStream.Position, 4);
+
+            if (max <= byte.MaxValue && min >= byte.MinValue)
+            {
+                accessor.ComponentType = GLTFComponentType.UnsignedByte;
+
+                foreach (var v in arr)
+                {
+                    _bufferWriter.Write((byte)v);
+                }
+            }
+            else if (max <= sbyte.MaxValue && min >= sbyte.MinValue && !isIndices)
+            {
+                accessor.ComponentType = GLTFComponentType.Byte;
+
+                foreach (var v in arr)
+                {
+                    _bufferWriter.Write((sbyte)v);
+                }
+            }
+            else if (max <= short.MaxValue && min >= short.MinValue && !isIndices)
+            {
+                accessor.ComponentType = GLTFComponentType.Short;
+
+                foreach (var v in arr)
+                {
+                    _bufferWriter.Write((short)v);
+                }
+            }
+            else if (max <= ushort.MaxValue && min >= ushort.MinValue)
+            {
+                accessor.ComponentType = GLTFComponentType.UnsignedShort;
+
+                foreach (var v in arr)
+                {
+                    _bufferWriter.Write((ushort)v);
+                }
+            }
+            else if (min >= uint.MinValue)
+            {
+                accessor.ComponentType = GLTFComponentType.UnsignedInt;
+
+                foreach (var v in arr)
+                {
+                    _bufferWriter.Write((uint)v);
+                }
+            }
+            else
+            {
+                accessor.ComponentType = GLTFComponentType.Float;
+
+                foreach (var v in arr)
+                {
+                    _bufferWriter.Write((float)v);
+                }
+            }
+
+            if (accessor.Type == GLTFAccessorAttributeType.SCALAR)
+            {
+                accessor.Min = new List<double> { min };
+                accessor.Max = new List<double> { max };
+            }
+
+            uint byteLength = CalculateAlignment((uint)_bufferWriter.BaseStream.Position - byteOffset, 4);
+
+            accessor.BufferView = ExportBufferView(byteOffset, byteLength);
+
+            var id = new AccessorId
+            {
+                Id = _root.Accessors.Count,
+                Root = _root
+            };
+            _root.Accessors.Add(accessor);
+
+            return id;
+        }
+
+        private AccessorId ExportAccessor(int[] arr, bool isIndices = false)
 		{
 			uint count = (uint)arr.Length;
 
@@ -1517,7 +1863,64 @@ namespace UnityGLTF
 			return id;
 		}
 
-		private AccessorId ExportAccessor(Vector2[] arr)
+        private AccessorId ExportAccessor(float[] arr)
+        {
+            uint count = (uint)arr.Length;
+
+            if (count == 0)
+            {
+                throw new Exception("Accessors can not have a count of 0.");
+            }
+
+            var accessor = new Accessor();
+            accessor.Count = count;
+            accessor.Type = GLTFAccessorAttributeType.SCALAR;
+
+            var min = arr[0];
+            var max = arr[0];
+
+            for (var i = 1; i < count; i++)
+            {
+                var cur = arr[i];
+
+                if (cur < min)
+                {
+                    min = cur;
+                }
+                if (cur > max)
+                {
+                    max = cur;
+                }
+            }
+
+            AlignToBoundary(_bufferWriter.BaseStream, 0x00);
+            uint byteOffset = CalculateAlignment((uint)_bufferWriter.BaseStream.Position, 4);
+
+            accessor.ComponentType = GLTFComponentType.Float;
+
+            foreach (var v in arr)
+            {
+                _bufferWriter.Write(v);
+            }
+
+            accessor.Min = new List<double> { min };
+            accessor.Max = new List<double> { max };
+
+            uint byteLength = CalculateAlignment((uint)_bufferWriter.BaseStream.Position - byteOffset, 4);
+
+            accessor.BufferView = ExportBufferView(byteOffset, byteLength);
+
+            var id = new AccessorId
+            {
+                Id = _root.Accessors.Count,
+                Root = _root
+            };
+            _root.Accessors.Add(accessor);
+
+            return id;
+        }
+
+        private AccessorId ExportAccessor(Vector2[] arr)
 		{
 			uint count = (uint)arr.Length;
 
@@ -1748,7 +2151,58 @@ namespace UnityGLTF
 			return id;
 		}
 
-		private AccessorId ExportAccessor(Color[] arr)
+        private AccessorId ExportAccessor(Matrix4x4[] arr)
+        {
+            var count = (uint)arr.Length;
+
+            if (count == 0)
+            {
+                throw new Exception("Accessors can not have a count of 0.");
+            }
+
+            var accessor = new Accessor();
+            accessor.ComponentType = GLTFComponentType.Float;
+            accessor.Count = count;
+            accessor.Type = GLTFAccessorAttributeType.MAT4;
+
+            AlignToBoundary(_bufferWriter.BaseStream, 0x00);
+            uint byteOffset = CalculateAlignment((uint)_bufferWriter.BaseStream.Position, 4);
+
+            foreach (var mat in arr)
+            {
+                _bufferWriter.Write(mat.m00);
+                _bufferWriter.Write(mat.m10);
+                _bufferWriter.Write(mat.m20);
+                _bufferWriter.Write(mat.m30);
+                _bufferWriter.Write(mat.m01);
+                _bufferWriter.Write(mat.m11);
+                _bufferWriter.Write(mat.m21);
+                _bufferWriter.Write(mat.m31);
+                _bufferWriter.Write(mat.m02);
+                _bufferWriter.Write(mat.m12);
+                _bufferWriter.Write(mat.m22);
+                _bufferWriter.Write(mat.m32);
+                _bufferWriter.Write(mat.m03);
+                _bufferWriter.Write(mat.m13);
+                _bufferWriter.Write(mat.m23);
+                _bufferWriter.Write(mat.m33);
+            }
+
+            uint byteLength = CalculateAlignment((uint)_bufferWriter.BaseStream.Position - byteOffset, 4);
+
+            accessor.BufferView = ExportBufferView(byteOffset, byteLength);
+
+            var id = new AccessorId
+            {
+                Id = _root.Accessors.Count,
+                Root = _root
+            };
+            _root.Accessors.Add(accessor);
+
+            return id;
+        }
+
+        private AccessorId ExportAccessor(Color[] arr)
 		{
 			uint count = (uint)arr.Length;
 
@@ -1938,5 +2392,18 @@ namespace UnityGLTF
 			return null;
 		}
 
-	}
+        protected static DrawMode GetDrawMode(MeshTopology topology)
+        {
+            switch (topology)
+            {
+                case MeshTopology.Points: return DrawMode.Points;
+                case MeshTopology.Lines: return DrawMode.Lines;
+                case MeshTopology.LineStrip: return DrawMode.LineStrip;
+                case MeshTopology.Triangles: return DrawMode.Triangles;
+            }
+
+            throw new Exception("glTF does not support Unity mesh topology: " + topology);
+        }
+
+    }
 }

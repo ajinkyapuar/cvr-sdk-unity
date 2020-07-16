@@ -410,17 +410,17 @@ namespace CognitiveVR
         /// <param name="path">used to bake terrain texture to file</param>
         static void BakeNonstandardRenderers(DynamicObject rootDynamic, List<BakeableMesh> meshes, string path)
         {
-            SkinnedMeshRenderer[] SkinnedMeshes = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
+            //SkinnedMeshRenderer[] SkinnedMeshes = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
             Terrain[] Terrains = UnityEngine.Object.FindObjectsOfType<Terrain>();
             Canvas[] Canvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
             if (rootDynamic != null)
             {
-                SkinnedMeshes = rootDynamic.GetComponentsInChildren<SkinnedMeshRenderer>();
+                //SkinnedMeshes = rootDynamic.GetComponentsInChildren<SkinnedMeshRenderer>();
                 Terrains = rootDynamic.GetComponentsInChildren<Terrain>();
                 Canvases = rootDynamic.GetComponentsInChildren<Canvas>();
             }
 
-            foreach (var skinnedMeshRenderer in SkinnedMeshes)
+            /*foreach (var skinnedMeshRenderer in SkinnedMeshes)
             {
                 if (!skinnedMeshRenderer.gameObject.activeInHierarchy) { continue; }
                 if (rootDynamic == null && skinnedMeshRenderer.GetComponentInParent<DynamicObject>() != null)
@@ -452,9 +452,9 @@ namespace CognitiveVR
                 skinnedMeshRenderer.BakeMesh(m);
                 bm.meshFilter.sharedMesh = m;
                 meshes.Add(bm);
-            }
+            }*/
 
-            //TODO ignore parent rotation and scale
+            //IMPROVEMENT ignore parent rotation and scale
             foreach (var v in Terrains)
             {
                 if (!v.isActiveAndEnabled) { continue; }
@@ -637,7 +637,7 @@ namespace CognitiveVR
                     //write terrain texture to baked texture
                     if (prototypes.Length > 0 && prototypes[highestMap].texture != null)
                     {
-                        //TODO figure out correct tiling for textures
+                        //IMPROVEMENT figure out correct tiling for textures
                         Color color = prototypes[highestMap].texture.GetPixel(y, x);
                         outTex.SetPixel(y, x, color);
                     }
