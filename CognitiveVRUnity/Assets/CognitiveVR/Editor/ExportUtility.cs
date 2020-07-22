@@ -110,8 +110,15 @@ namespace CognitiveVR
             List<Transform> t = new List<Transform>();
             foreach (var v in gameObjects)
             {
+                //if shared mesh is missing from mesh filter
                 if (v.GetComponent<MeshFilter>() != null && v.GetComponent<MeshFilter>().sharedMesh == null) { continue; }
-                if (v.activeInHierarchy) { t.Add(v.transform); }
+                if (!v.activeInHierarchy) { continue; }
+
+                //remove all skinned mesh renderers from scene export. BakeNonstandardRenderers will pick them up so they are not exported twice
+                if (v.GetComponent<SkinnedMeshRenderer>() != null) { continue; }
+
+                t.Add(v.transform);
+
                 //check for mesh renderers here, before nodes are constructed for invalid objects?
             }
 
@@ -410,7 +417,7 @@ namespace CognitiveVR
         /// <param name="path">used to bake terrain texture to file</param>
         static void BakeNonstandardRenderers(DynamicObject rootDynamic, List<BakeableMesh> meshes, string path)
         {
-            //SkinnedMeshRenderer[] SkinnedMeshes = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
+            SkinnedMeshRenderer[] SkinnedMeshes = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
             Terrain[] Terrains = UnityEngine.Object.FindObjectsOfType<Terrain>();
             Canvas[] Canvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
             if (rootDynamic != null)
@@ -420,8 +427,11 @@ namespace CognitiveVR
                 Canvases = rootDynamic.GetComponentsInChildren<Canvas>();
             }
 
-            /*foreach (var skinnedMeshRenderer in SkinnedMeshes)
+            foreach (var skinnedMeshRenderer in SkinnedMeshes)
             {
+                //bake if part of static world, otherwise continue
+                if (rootDynamic != null) { continue; }
+
                 if (!skinnedMeshRenderer.gameObject.activeInHierarchy) { continue; }
                 if (rootDynamic == null && skinnedMeshRenderer.GetComponentInParent<DynamicObject>() != null)
                 {
@@ -452,7 +462,7 @@ namespace CognitiveVR
                 skinnedMeshRenderer.BakeMesh(m);
                 bm.meshFilter.sharedMesh = m;
                 meshes.Add(bm);
-            }*/
+            }
 
             //IMPROVEMENT ignore parent rotation and scale
             foreach (var v in Terrains)
@@ -951,18 +961,18 @@ namespace CognitiveVR
             BakeNonstandardRenderers(dynamicObject, temp, path + dynamicObject.MeshName + Path.DirectorySeparatorChar);
 
             //need to bake scale into dynamic, since it doesn't have context about the scene hierarchy
-            Vector3 startScale = dynamicObject.transform.localScale;
-            dynamicObject.transform.localScale = dynamicObject.transform.lossyScale;
-            RectTransform rt = dynamicObject.GetComponent<RectTransform>();
-            if (rt != null)
-            {
-                var width = rt.sizeDelta.x;
-                var height = rt.sizeDelta.y;
-                var min = Mathf.Min(width, height);
-                dynamicObject.transform.localScale = new Vector3(dynamicObject.transform.localScale.x * min,
-                    dynamicObject.transform.localScale.y * min,
-                    dynamicObject.transform.localScale.z);
-            }
+            //Vector3 startScale = dynamicObject.transform.localScale;
+            //dynamicObject.transform.localScale = dynamicObject.transform.lossyScale;
+            //RectTransform rt = dynamicObject.GetComponent<RectTransform>();
+            //if (rt != null)
+            //{
+            //    var width = rt.sizeDelta.x;
+            //    var height = rt.sizeDelta.y;
+            //    var min = Mathf.Min(width, height);
+            //    dynamicObject.transform.localScale = new Vector3(dynamicObject.transform.localScale.x * min,
+            //        dynamicObject.transform.localScale.y * min,
+            //        dynamicObject.transform.localScale.z);
+            //}
             try
             {
                 var exporter = new UnityGLTF.GLTFSceneExporter(new Transform[1] { dynamicObject.transform }, RetrieveTexturePath, dynamicObject);
@@ -973,16 +983,16 @@ namespace CognitiveVR
             {
                 Debug.LogException(e);
             }
-            if (rt != null)
-            {
-                var width = rt.sizeDelta.x;
-                var height = rt.sizeDelta.y;
-                var min = Mathf.Min(width, height);
-                dynamicObject.transform.localScale = new Vector3(dynamicObject.transform.localScale.x / min,
-                    dynamicObject.transform.localScale.y / min,
-                    dynamicObject.transform.localScale.z);
-            }
-            dynamicObject.transform.localScale = startScale;
+            //if (rt != null)
+            //{
+            //    var width = rt.sizeDelta.x;
+            //    var height = rt.sizeDelta.y;
+            //    var min = Mathf.Min(width, height);
+            //    dynamicObject.transform.localScale = new Vector3(dynamicObject.transform.localScale.x / min,
+            //        dynamicObject.transform.localScale.y / min,
+            //        dynamicObject.transform.localScale.z);
+            //}
+            //dynamicObject.transform.localScale = startScale;
 
             //destroy bakeable meshes from non-standard renderers
             for (int i = 0; i < temp.Count; i++)

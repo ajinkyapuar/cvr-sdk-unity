@@ -80,6 +80,7 @@ namespace UnityGLTF
 		public static bool RequireExtensions = false; //PROBABLY FALSE
 
         public CognitiveVR.DynamicObject Dynamic;
+        public bool IsDynamicExporter;
 
 		/// <summary>
 		/// Create a GLTFExporter that exports out a transform. if dynamic is NOT set, skip any dynamic objects in nodes. if dynamic IS set, skip any dynamics that are not equal to this object
@@ -88,7 +89,8 @@ namespace UnityGLTF
 		public GLTFSceneExporter(Transform[] rootTransforms, RetrieveTexturePathDelegate retrieveTexturePathDelegate, CognitiveVR.DynamicObject dynamic = null)
 		{
             Dynamic = dynamic;
-			_retrieveTexturePathDelegate = retrieveTexturePathDelegate;
+            IsDynamicExporter = dynamic != null;
+            _retrieveTexturePathDelegate = retrieveTexturePathDelegate;
 
 			var metalGlossChannelSwapShader = Resources.Load("MetalGlossChannelSwap", typeof(Shader)) as Shader;
 			_metalGlossChannelSwapMaterial = new Material(metalGlossChannelSwapShader);
@@ -540,15 +542,23 @@ namespace UnityGLTF
                 _existedNodes.Add(nodeTransform.GetInstanceID(), id);
             }
 
+            //bool isDynamic = nodeTransform.GetComponentInParent<CognitiveVR.DynamicObject>() != null;
+
             // children that are primitives get put in a mesh
             GameObject[] meshPrimitives, skinnedMeshPrimitives, nonPrimitives;
 			FilterPrimitives(nodeTransform, out meshPrimitives, out skinnedMeshPrimitives, out nonPrimitives);
             if (meshPrimitives.Length + skinnedMeshPrimitives.Length > 0)
             {
-                if (skinnedMeshPrimitives.Length > 0)
+                if (IsDynamicExporter)
                 {
-                    ExportSkin(nodeTransform.name, skinnedMeshPrimitives, node);
+                    //TODO HERE
+                    //only export a skin node if this is a dynamic obejct!
+                    if (skinnedMeshPrimitives.Length > 0)
+                    {
+                        ExportSkin(nodeTransform.name, skinnedMeshPrimitives, node);
+                    }
                 }
+
 
                 if (meshPrimitives.Length > 0)
                 {
@@ -557,7 +567,8 @@ namespace UnityGLTF
 
                 var primitives = new List<GameObject>();
                 primitives.AddRange(meshPrimitives);
-                primitives.AddRange(skinnedMeshPrimitives);
+                if (IsDynamicExporter)
+                    primitives.AddRange(skinnedMeshPrimitives);
                 // associate unity meshes with gltf mesh id
                 foreach (var prim in primitives)
                 {
@@ -578,7 +589,7 @@ namespace UnityGLTF
             // children that are not primitives get added as child nodes
             if (nonPrimitives.Length > 0)
 			{
-				node.Children = new List<NodeId>(nonPrimitives.Length);
+                node.Children = new List<NodeId>(nonPrimitives.Length);
                 CognitiveVR.DynamicObject dyn;
                 List<GameObject> postProcess = new List<GameObject>();
                 foreach (var child in nonPrimitives)
@@ -793,35 +804,42 @@ namespace UnityGLTF
             nonPrimitives = nonPrims.ToArray();
         }
 
+        //NOTE basically nothing is ever a primitive
 		private bool IsPrimitive(GameObject gameObject)
 		{
+            return false;
             var mf = gameObject.GetComponent<MeshFilter>();
             var mr = gameObject.GetComponent<MeshRenderer>();
 
             /*
 			 * Primitives have the following properties:
 			 * - have no children
-			 * - have no non-default local transform properties
+			 * - have default local transform properties
 			 * - have MeshFilter and MeshRenderer components
 			 */
-            return gameObject.activeInHierarchy
+            bool isPrimitive = 
+                gameObject.activeInHierarchy
                 && gameObject.transform.childCount == 0
                 && gameObject.transform.localPosition == Vector3.zero
                 && gameObject.transform.localRotation == Quaternion.identity
                 && gameObject.transform.localScale == Vector3.one
                 && ContainsValidRenderer(gameObject)
+
+                //primitive should have bakeable override temporary mesh OR have shared mesh saved in project
                 && (OverrideBakeables.Find(delegate (CognitiveVR.BakeableMesh bm)
                 {
                     return bm.meshFilter == mf;
                 }) != null
-                
-                || (mf != null && !string.IsNullOrEmpty(UnityEditor.AssetDatabase.GetAssetPath(mf.sharedMesh))));
 
+                || (mf != null && !string.IsNullOrEmpty(UnityEditor.AssetDatabase.GetAssetPath(mf.sharedMesh))));
 
             //&& (OverrideBakeables.Find(delegate (CognitiveVR.BakeableMesh bm) { return bm.meshFilter == mf; }) != null || !string.IsNullOrEmpty(UnityEditor.AssetDatabase.GetAssetPath(mf.sharedMesh)));
             //&& mr.enabled;
             //should check if the valid renderer is enabled here
             //support override bakeable meshes (canvas, terrain, environmental skinned meshes
+            if (isPrimitive)
+                Debug.LogWarning(gameObject.name + " is primitive!");
+            return isPrimitive;
         }
 
         private void ExportSkin(string name, GameObject[] primitives, Node node)
@@ -861,8 +879,9 @@ namespace UnityGLTF
                     {
                         var boneNode = new Node
                         {
+                            //flipped X translation position
                             Name = ExportNames ? bone.gameObject.name : null,
-                            Translation = new GLTF.Math.Vector3(translation.x, translation.y, translation.z),
+                            Translation = new GLTF.Math.Vector3(-translation.x, translation.y, translation.z),
                             Rotation = new GLTF.Math.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
                             Scale = new GLTF.Math.Vector3(scale.x, scale.y, scale.z),
                         };
@@ -1124,15 +1143,6 @@ namespace UnityGLTF
             _meshToPrims[meshObj] = prims;
 
             return prims;
-        }
-
-        private static bool EmptyPrimitive(MeshPrimitive prim)
-        {
-            if (prim == null || prim.Attributes == null)
-            {
-                return true;
-            }
-            return false;
         }
 
         private MaterialId ExportMaterial(Material materialObj, MeshRenderer renderer)
