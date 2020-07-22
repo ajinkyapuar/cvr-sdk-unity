@@ -80,6 +80,8 @@ namespace UnityGLTF
 		public static bool RequireExtensions = false; //PROBABLY FALSE
 
         public CognitiveVR.DynamicObject Dynamic;
+
+        //indicates if this exporter was instantiated to export a dynamic object. this is a scene if false
         public bool IsDynamicExporter;
 
 		/// <summary>
@@ -530,6 +532,11 @@ namespace UnityGLTF
                 node.SetUnityTransform(nodeTransform);
             }
 
+            //BUG if skinned mesh is offset from armature, the exported gltf does not position mesh correctly
+            //similar https://github.com/KhronosGroup/glTF-Blender-IO/issues/368
+            //GLTF Spec - "Client implementations should apply only the transform of the skeleton root node to the skinned mesh while ignoring the transform of the skinned mesh node."
+            //FIX? if exporting a skinned mesh, should bake offset into vertex position. offset is not per instance, instead it is the value saved in asset
+
             var id = new NodeId
 			{
 				Id = _root.Nodes.Count,
@@ -542,8 +549,6 @@ namespace UnityGLTF
                 _existedNodes.Add(nodeTransform.GetInstanceID(), id);
             }
 
-            //bool isDynamic = nodeTransform.GetComponentInParent<CognitiveVR.DynamicObject>() != null;
-
             // children that are primitives get put in a mesh
             GameObject[] meshPrimitives, skinnedMeshPrimitives, nonPrimitives;
 			FilterPrimitives(nodeTransform, out meshPrimitives, out skinnedMeshPrimitives, out nonPrimitives);
@@ -551,7 +556,6 @@ namespace UnityGLTF
             {
                 if (IsDynamicExporter)
                 {
-                    //TODO HERE
                     //only export a skin node if this is a dynamic obejct!
                     if (skinnedMeshPrimitives.Length > 0)
                     {
@@ -837,8 +841,6 @@ namespace UnityGLTF
             //&& mr.enabled;
             //should check if the valid renderer is enabled here
             //support override bakeable meshes (canvas, terrain, environmental skinned meshes
-            if (isPrimitive)
-                Debug.LogWarning(gameObject.name + " is primitive!");
             return isPrimitive;
         }
 
@@ -941,7 +943,6 @@ namespace UnityGLTF
                 _root.Skins.Add(skin);
 
                 node.Skin = skinId;
-
                 node.Mesh = ExportMesh(prim.name, new GameObject[] { prim });
 
                 _existedSkins.Add(smr.rootBone.GetInstanceID(), skinId);
