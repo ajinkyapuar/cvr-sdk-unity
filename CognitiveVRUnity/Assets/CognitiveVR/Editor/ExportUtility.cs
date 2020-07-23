@@ -104,11 +104,19 @@ namespace CognitiveVR
         /// </summary>
         public static void ExportGLTFScene()
         {
-            var scene = UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene();
-            var gameObjects = scene.GetRootGameObjects();
+            var activeScene = UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene();
+            List<GameObject> allRootObjects = new List<GameObject>();
+            for(int i = 0; i< UnityEditor.SceneManagement.EditorSceneManager.sceneCount;i++)
+            {
+                var scene = UnityEditor.SceneManagement.EditorSceneManager.GetSceneAt(i);
+                if (scene.isLoaded)
+                {
+                    allRootObjects.AddRange(scene.GetRootGameObjects());
+                }
+            }
 
             List<Transform> t = new List<Transform>();
-            foreach (var v in gameObjects)
+            foreach (var v in allRootObjects)
             {
                 //if shared mesh is missing from mesh filter
                 if (v.GetComponent<MeshFilter>() != null && v.GetComponent<MeshFilter>().sharedMesh == null) { continue; }
@@ -124,7 +132,7 @@ namespace CognitiveVR
 
             List<BakeableMesh> temp = new List<BakeableMesh>();
 
-            string path = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + "CognitiveVR_SceneExplorerExport" + Path.DirectorySeparatorChar + scene.name;
+            string path = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + "CognitiveVR_SceneExplorerExport" + Path.DirectorySeparatorChar + activeScene.name;
             try
             {
                 EditorUtility.DisplayProgressBar("Export GLTF", "Bake Nonstandard Renderers", 0.10f); //generate meshes from terrain/canvas/skeletal meshes
@@ -518,8 +526,9 @@ namespace CognitiveVR
                 bm.meshRenderer = bm.tempGo.AddComponent<MeshRenderer>();
                 bm.meshRenderer.sharedMaterial = new Material(Shader.Find("Transparent/Diffuse"));
 
-                var width = v.GetComponent<RectTransform>().sizeDelta.x * v.transform.localScale.x;
-                var height = v.GetComponent<RectTransform>().sizeDelta.y * v.transform.localScale.y;
+                //remove transform scale
+                var width = v.GetComponent<RectTransform>().sizeDelta.x;// * v.transform.localScale.x;
+                var height = v.GetComponent<RectTransform>().sizeDelta.y;// * v.transform.localScale.y;
 
                 //bake texture from render
                 var screenshot = CanvasTextureBake(v.transform);
@@ -960,7 +969,6 @@ namespace CognitiveVR
             List<BakeableMesh> temp = new List<BakeableMesh>();
             BakeNonstandardRenderers(dynamicObject, temp, path + dynamicObject.MeshName + Path.DirectorySeparatorChar);
 
-            //need to bake scale into dynamic, since it doesn't have context about the scene hierarchy
             //Vector3 startScale = dynamicObject.transform.localScale;
             //dynamicObject.transform.localScale = dynamicObject.transform.lossyScale;
             //RectTransform rt = dynamicObject.GetComponent<RectTransform>();
@@ -1099,7 +1107,7 @@ namespace CognitiveVR
         public static bool UploadSelectedDynamicObjectMeshes(bool ShowPopupWindow = false)
         {
             List<string> dynamicMeshNames = new List<string>();
-            foreach (var v in Selection.transforms)
+            foreach (var v in Selection.gameObjects)
             {
                 var dyn = v.GetComponent<DynamicObject>();
                 if (dyn == null) { continue; }
